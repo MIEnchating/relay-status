@@ -1,0 +1,9 @@
+node_modules
+.nuxt
+.output
+.data
+.env
+.nuxt-dev*.log
+dist
+*.local
+preview*.png
