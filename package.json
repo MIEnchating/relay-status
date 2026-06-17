@@ -5,12 +5,17 @@
   "scripts": {
     "dev": "nuxt dev --host 0.0.0.0",
     "build": "nuxt build",
-    "preview": "nuxt preview"
+    "preview": "nuxt preview",
+    "start": "node .output/server/index.mjs",
+    "pm2:start": "pm2 start ecosystem.config.cjs --env production",
+    "pm2:reload": "pm2 reload ecosystem.config.cjs --env production",
+    "pm2:stop": "pm2 stop relayai-status",
+    "pm2:logs": "pm2 logs relayai-status"
   },
   "dependencies": {
+    "fast-xml-parser": "^5.9.2",
     "lucide-vue-next": "^1.0.0",
     "nuxt": "^4.4.4",
     "vue": "^3.5.13"
-  },
-  "devDependencies": {}
+  }
 }

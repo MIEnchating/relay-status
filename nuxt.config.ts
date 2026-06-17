@@ -5,6 +5,7 @@ export default defineNuxtConfig({
   runtimeConfig: {
     uptimeKumaBaseUrl: process.env.NUXT_UPTIME_KUMA_BASE_URL || '',
     uptimeKumaSlug: process.env.NUXT_UPTIME_KUMA_SLUG || 'default',
+    openaiStatusFeedUrl: process.env.NUXT_OPENAI_STATUS_FEED_URL || 'https://status.openai.com/feed.atom',
     public: {
       refreshSeconds: Number(process.env.NUXT_PUBLIC_REFRESH_SECONDS || 60),
       statusTitle: process.env.NUXT_PUBLIC_STATUS_TITLE || ''

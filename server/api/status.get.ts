@@ -163,7 +163,7 @@ function normalizePayload(
 function normalizeMonitor(monitor: KumaMonitor, heartbeat: KumaHeartbeatResponse): Monitor {
   const id = String(monitor.id)
   const beats = (heartbeat.heartbeatList?.[id] || []).slice(-64).map((beat): Beat => ({
-    time: beat.time || null,
+    time: normalizeDateTime(beat.time),
     status: normalizeStatus(beat.status),
     ping: normalizeNullableNumber(beat.ping)
   }))
@@ -246,7 +246,7 @@ function normalizeIncidents(incidents: Incident[]) {
     title: incident.title || '事件',
     content: stripHtml(incident.content || ''),
     style: incident.style || 'warning',
-    createdAt: incident.createdDate || incident.created_date || null
+    createdAt: normalizeDateTime(incident.createdDate || incident.created_date)
   }))
 }
 
@@ -255,9 +255,22 @@ function normalizeMaintenance(maintenanceList: Maintenance[]) {
     title: item.title || '计划维护',
     description: stripHtml(item.description || ''),
     strategy: item.strategy || null,
-    startAt: item.startDateTime || null,
-    endAt: item.endDateTime || null
+    startAt: normalizeDateTime(item.startDateTime),
+    endAt: normalizeDateTime(item.endDateTime)
   }))
+}
+
+function normalizeDateTime(value: string | null | undefined) {
+  if (!value) {
+    return null
+  }
+
+  const trimmed = value.trim()
+  const hasTimezone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(trimmed)
+  const normalized = trimmed.replace(' ', 'T')
+  const date = new Date(hasTimezone ? normalized : `${normalized}Z`)
+
+  return Number.isNaN(date.getTime()) ? trimmed : date.toISOString()
 }
 
 function normalizeStatus(status: unknown): KumaStatus {

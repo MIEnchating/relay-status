@@ -1,0 +1,81 @@
+# RelayAI 状态页部署
+
+## 首次部署
+
+服务器需要 Node.js 20+、npm、pm2。
+
+```bash
+npm i -g pm2
+git clone https://github.com/MIEnchating/kuma-status-board.git
+cd kuma-status-board
+cp .env.example .env
+```
+
+编辑 `.env`：
+
+```bash
+NUXT_UPTIME_KUMA_BASE_URL=https://status.relayai.tech
+NUXT_UPTIME_KUMA_SLUG=relayai
+NUXT_OPENAI_STATUS_FEED_URL=https://status.openai.com/feed.atom
+NUXT_PUBLIC_STATUS_TITLE=RelayAI 状态
+NUXT_PUBLIC_REFRESH_SECONDS=300
+```
+
+构建并启动：
+
+```bash
+npm ci
+npm run build
+npm run pm2:start
+pm2 save
+pm2 startup systemd
+```
+
+PM2 会监听 `0.0.0.0:3001`，进程名是 `relayai-status`。
+
+## Nginx 反代
+
+```nginx
+server {
+    listen 80;
+    server_name status.relayai.tech;
+
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+检查并重载：
+
+```bash
+nginx -t
+systemctl reload nginx
+```
+
+## 后续更新
+
+```bash
+cd kuma-status-board
+git pull --ff-only
+npm ci
+npm run build
+npm run pm2:reload
+```
+
+常用命令：
+
+```bash
+npm run pm2:logs
+npm run pm2:stop
+pm2 status
+```
