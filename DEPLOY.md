@@ -9,10 +9,10 @@
 Ubuntu / Debian：
 
 ```bash
-apt-get update
-apt-get install -y curl ca-certificates
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-apt-get install -y nodejs
+sudo apt-get update
+sudo apt-get install -y curl ca-certificates
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs
 node -v
 npm -v
 ```
@@ -20,9 +20,9 @@ npm -v
 CentOS / Alibaba Cloud Linux / RHEL：
 
 ```bash
-yum install -y curl ca-certificates
-curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
-yum install -y nodejs
+sudo yum install -y curl ca-certificates
+curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo -E bash -
+sudo yum install -y nodejs
 node -v
 npm -v
 ```
