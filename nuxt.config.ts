@@ -21,6 +21,9 @@ export default defineNuxtConfig({
           name: 'description',
           content: 'A polished Nuxt status dashboard powered by Uptime Kuma.'
         }
+      ],
+      link: [
+        { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }
       ]
     }
   }

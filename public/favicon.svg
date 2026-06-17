@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="RelayAI status icon">
+  <rect width="64" height="64" rx="16" fill="#181715"/>
+  <path d="M14 46h36" stroke="#cc785c" stroke-width="4" stroke-linecap="round"/>
+  <text x="15" y="42" fill="#faf9f5" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="800" letter-spacing="0">R</text>
+  <circle cx="47" cy="18" r="6" fill="#5db872"/>
+  <circle cx="47" cy="18" r="10" fill="none" stroke="#5db872" stroke-opacity=".26" stroke-width="3"/>
+</svg>
