@@ -2,7 +2,30 @@
 
 ## 首次部署
 
-服务器需要 Node.js 20+、npm、pm2。
+服务器需要 Node.js 20.19+ 或 22.12+、npm、pm2。推荐直接安装 Node.js 22 LTS。
+
+## 安装 Node.js
+
+Ubuntu / Debian：
+
+```bash
+apt-get update
+apt-get install -y curl ca-certificates
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+apt-get install -y nodejs
+node -v
+npm -v
+```
+
+CentOS / Alibaba Cloud Linux / RHEL：
+
+```bash
+yum install -y curl ca-certificates
+curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
+yum install -y nodejs
+node -v
+npm -v
+```
 
 ```bash
 npm i -g pm2
