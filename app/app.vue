@@ -2,8 +2,8 @@
 import {
   AlertTriangle,
   ExternalLink,
-  Server,
-  ShieldCheck,
+  RefreshCw,
+  Timer,
   Wrench
 } from 'lucide-vue-next'
 
@@ -69,6 +69,7 @@ type Beat = {
   time: string | null
   status: 0 | 1 | 2 | 3
   ping: number | null
+  message: string | null
 }
 
 type OpenAIStatusPayload = {
@@ -89,7 +90,9 @@ type OpenAIStatusItem = {
 }
 
 const config = useRuntimeConfig()
-const refreshSeconds = computed(() => Math.max(300, Number(config.public.refreshSeconds) || 300))
+const defaultRefreshSeconds = Math.max(10, Number(config.public.refreshSeconds) || 300)
+const refreshCountdown = ref(defaultRefreshSeconds)
+const isRefreshing = ref(false)
 
 const { data, error, refresh } = await useFetch<StatusPayload>('/api/status', {
   default: () => null
@@ -102,46 +105,18 @@ const pageTitle = computed(() => {
   const customTitle = String(config.public.statusTitle || '').trim()
   return customTitle || data.value?.page.title || '服务状态'
 })
-const pageDescription = computed(() => data.value?.page.description || '实时服务健康状态')
 const overall = computed(() => data.value?.overall)
 const groups = computed(() => data.value?.groups || [])
 const incidents = computed(() => data.value?.incidents || [])
 const maintenanceList = computed(() => data.value?.maintenanceList || [])
 const openaiItems = computed(() => openaiStatus.value?.items || [])
 const hasOpenAIStatus = computed(() => openaiItems.value.length > 0 || Boolean(openaiStatusError.value))
-const updatedAt = computed(() => data.value?.updatedAt || null)
-const heroTitle = computed(() => overall.value?.label || '正在读取状态')
-const heroSummary = computed(() => overall.value?.summary || '正在同步 Uptime Kuma 状态页数据')
-const healthScore = computed(() => {
-  if (typeof overall.value?.avgUptime === 'number') {
-    return Math.round(overall.value.avgUptime)
-  }
-
-  if (!overall.value?.total) {
-    return 0
-  }
-
-  return Math.round(((overall.value.up + overall.value.maintenance * 0.65) / overall.value.total) * 100)
-})
-const overallIcon = computed(() => {
-  if (overall.value?.tone === 'down' || overall.value?.tone === 'degraded') {
-    return AlertTriangle
-  }
-
-  if (overall.value?.tone === 'maintenance') {
-    return Wrench
-  }
-
-  return ShieldCheck
-})
 const statusCounts = computed(() => {
   const current = overall.value
 
   return [
     { label: '正常服务', value: current?.up ?? 0, tone: 'up' },
-    { label: '故障服务', value: current?.down ?? 0, tone: 'down' },
-    { label: '等待检测', value: current?.pending ?? 0, tone: 'pending' },
-    { label: '维护服务', value: current?.maintenance ?? 0, tone: 'maintenance' }
+    { label: '故障服务', value: current?.down ?? 0, tone: 'down' }
   ]
 })
 
@@ -153,9 +128,13 @@ let refreshTimer: ReturnType<typeof window.setInterval> | undefined
 
 onMounted(() => {
   refreshTimer = window.setInterval(() => {
-    refresh()
-    refreshOpenAIStatus()
-  }, refreshSeconds.value * 1000)
+    if (refreshCountdown.value <= 1) {
+      refreshAll()
+      return
+    }
+
+    refreshCountdown.value -= 1
+  }, 1000)
 })
 
 onBeforeUnmount(() => {
@@ -166,6 +145,19 @@ onBeforeUnmount(() => {
 
 function statusClass(tone?: string) {
   return `is-${tone || 'pending'}`
+}
+
+function refreshAll() {
+  if (isRefreshing.value) {
+    return
+  }
+
+  isRefreshing.value = true
+  Promise.all([refresh(), refreshOpenAIStatus()])
+    .finally(() => {
+      isRefreshing.value = false
+      refreshCountdown.value = defaultRefreshSeconds
+    })
 }
 
 function beatClass(status: 0 | 1 | 2 | 3) {
@@ -215,20 +207,23 @@ function formatMonitorType(value: string | null | undefined) {
 }
 
 function formatBeatTooltip(beat: Beat) {
-  return `${formatDateTimeWithSeconds(beat.time)} · ${statusLabel(beat.status)} · 延迟 ${formatPing(beat.ping)}`
+  const parts = [formatDateTimeWithSeconds(beat.time), statusLabel(beat.status)]
+
+  if (beat.status === 0) {
+    parts.push(beat.message || '未返回故障原因')
+  } else {
+    parts.push(`延迟 ${formatPing(beat.ping)}`)
+  }
+
+  return parts.join(' · ')
 }
 
 function recentBeats(beats: Beat[]) {
   return beats.slice(-36)
 }
 
-function beatHeight(_beat: Beat) {
-  return '52px'
-}
-
 function beatStyle(beat: Beat) {
   return {
-    '--beat-height': beatHeight(beat),
     '--beat-color': beatColor(beat)
   }
 }
@@ -340,87 +335,54 @@ function openaiItemClass(tone: OpenAIStatusItem['tone']) {
       <span>正在显示示例数据。复制 .env.example 为 .env 后填入 Uptime Kuma 地址即可接入真实状态页。</span>
     </div>
 
-    <section class="status-hero">
-      <div class="hero-copy">
-        <p class="eyebrow">实时状态</p>
-        <h2>{{ heroTitle }}</h2>
-        <p>{{ heroSummary }}。{{ pageDescription }}</p>
-
-        <div class="hero-actions">
-          <span class="status-chip" :class="statusClass(overall?.tone)">
-            <span aria-hidden="true" />
-            {{ overall?.label || '加载中' }}
-          </span>
-          <span class="source-pill">
-            <Server :size="15" />
-            {{ overall?.total ?? 0 }} 项服务
-          </span>
-        </div>
-      </div>
-
-      <aside class="operations-panel" :class="statusClass(overall?.tone)" :style="{ '--score': `${healthScore}%` }">
-        <div class="panel-heading">
-          <span>健康指数</span>
-          <component :is="overallIcon" :size="22" />
-        </div>
-        <strong class="health-score">{{ healthScore }}</strong>
-        <div class="health-track" aria-hidden="true">
-          <span />
-        </div>
-        <dl class="panel-stats">
-          <div>
-            <dt>24 小时可用率</dt>
-            <dd>{{ formatPercent(overall?.avgUptime) }}</dd>
-          </div>
-          <div>
-            <dt>平均延迟</dt>
-            <dd>{{ formatPing(overall?.avgPing) }}</dd>
-          </div>
-          <div>
-            <dt>最后更新</dt>
-            <dd>{{ formatRelativeTime(updatedAt) }}</dd>
-          </div>
-        </dl>
-      </aside>
-    </section>
-
-    <section class="status-counts" aria-label="状态汇总">
-      <article v-for="item in statusCounts" :key="item.label" class="count-card" :class="statusClass(item.tone)">
-        <span>{{ item.label }}</span>
-        <strong>{{ item.value }}</strong>
-      </article>
-    </section>
-
-    <section v-if="incidents.length || maintenanceList.length" class="alerts-band">
-      <article v-for="incident in incidents" :key="`incident-${incident.title}-${incident.createdAt}`" class="alert-card">
-        <AlertTriangle :size="20" />
-        <div>
-          <div class="alert-heading">
-            <strong>{{ incident.title }}</strong>
-            <time>{{ formatDateTime(incident.createdAt) }}</time>
-          </div>
-          <p>{{ incident.content }}</p>
-        </div>
-      </article>
-
-      <article v-for="item in maintenanceList" :key="`maintenance-${item.title}-${item.startAt}`" class="alert-card is-maintenance">
-        <Wrench :size="20" />
-        <div>
-          <div class="alert-heading">
-            <strong>{{ item.title }}</strong>
-            <time>{{ formatDateTime(item.startAt) }} - {{ formatDateTime(item.endAt) }}</time>
-          </div>
-          <p>{{ item.description }}</p>
-        </div>
-      </article>
-    </section>
-
     <div class="monitor-layout" :class="{ 'has-rail': hasOpenAIStatus }">
       <div class="service-stack">
+        <section class="refresh-toolbar" aria-label="刷新控制">
+          <span class="refresh-countdown">
+            <Timer :size="15" />
+            {{ isRefreshing ? '正在刷新' : `${refreshCountdown} 秒后刷新` }}
+          </span>
+
+          <button class="refresh-button" type="button" :disabled="isRefreshing" @click="refreshAll">
+            <RefreshCw :size="16" :class="{ 'is-spinning': isRefreshing }" />
+            <span>刷新</span>
+          </button>
+        </section>
+
+        <section class="status-counts" aria-label="状态汇总">
+          <article v-for="item in statusCounts" :key="item.label" class="count-card" :class="statusClass(item.tone)">
+            <span>{{ item.label }}</span>
+            <strong>{{ item.value }}</strong>
+          </article>
+        </section>
+
+        <section v-if="incidents.length || maintenanceList.length" class="alerts-band">
+          <article v-for="incident in incidents" :key="`incident-${incident.title}-${incident.createdAt}`" class="alert-card">
+            <AlertTriangle :size="20" />
+            <div>
+              <div class="alert-heading">
+                <strong>{{ incident.title }}</strong>
+                <time>{{ formatDateTime(incident.createdAt) }}</time>
+              </div>
+              <p>{{ incident.content }}</p>
+            </div>
+          </article>
+
+          <article v-for="item in maintenanceList" :key="`maintenance-${item.title}-${item.startAt}`" class="alert-card is-maintenance">
+            <Wrench :size="20" />
+            <div>
+              <div class="alert-heading">
+                <strong>{{ item.title }}</strong>
+                <time>{{ formatDateTime(item.startAt) }} - {{ formatDateTime(item.endAt) }}</time>
+              </div>
+              <p>{{ item.description }}</p>
+            </div>
+          </article>
+        </section>
+
         <section v-for="group in groups" :key="group.name" class="service-section">
           <div class="section-heading">
             <div>
-              <p>监控分组</p>
               <h2>{{ group.name }}</h2>
             </div>
             <span>{{ group.monitors.length }} 项服务</span>
@@ -471,7 +433,8 @@ function openaiItemClass(tone: OpenAIStatusItem['tone']) {
                   <span class="beat-tooltip" role="tooltip">
                     <strong>{{ statusLabel(beat.status) }}</strong>
                     <span>{{ formatDateTimeWithSeconds(beat.time) }}</span>
-                    <span>延迟 {{ formatPing(beat.ping) }}</span>
+                    <span v-if="beat.status === 0">原因：{{ beat.message || '未返回故障原因' }}</span>
+                    <span v-else>延迟 {{ formatPing(beat.ping) }}</span>
                   </span>
                 </span>
               </div>

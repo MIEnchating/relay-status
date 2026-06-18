@@ -59,6 +59,7 @@ type Beat = {
   time: string | null
   status: KumaStatus
   ping: number | null
+  message: string | null
 }
 
 type Monitor = {
@@ -165,12 +166,14 @@ function normalizeMonitor(monitor: KumaMonitor, heartbeat: KumaHeartbeatResponse
   const beats = (heartbeat.heartbeatList?.[id] || []).slice(-64).map((beat): Beat => ({
     time: normalizeDateTime(beat.time),
     status: normalizeStatus(beat.status),
-    ping: normalizeNullableNumber(beat.ping)
+    ping: normalizeNullableNumber(beat.ping),
+    message: normalizeMessage(beat.msg)
   }))
   const latest = beats.at(-1)
   const status = latest?.status ?? 2
   const uptime = normalizeUptime(heartbeat.uptimeList?.[`${id}_24`] ?? heartbeat.uptimeList?.[id])
   const pingValues = beats.map((beat) => beat.ping).filter((ping): ping is number => typeof ping === 'number')
+  const latestDownMessage = [...beats].reverse().find((beat) => beat.status === 0 && beat.message)?.message || null
 
   return {
     id,
@@ -184,7 +187,7 @@ function normalizeMonitor(monitor: KumaMonitor, heartbeat: KumaHeartbeatResponse
     ping: latest?.ping ?? null,
     avgPing: average(pingValues),
     lastChecked: latest?.time || null,
-    message: null,
+    message: status === 0 ? latest?.message || latestDownMessage : null,
     tags: (monitor.tags || []).map((tag) => tag.name).filter((name): name is string => Boolean(name)),
     beats
   }
@@ -297,6 +300,12 @@ function normalizeNullableNumber(value: unknown) {
   return Number.isFinite(numberValue) ? numberValue : null
 }
 
+function normalizeMessage(value: unknown) {
+  const message = typeof value === 'string' ? stripHtml(value).trim() : ''
+
+  return message || null
+}
+
 function average(values: number[]) {
   if (!values.length) {
     return null
@@ -317,7 +326,8 @@ function buildDemoPayload(updatedAt: string) {
       return {
         time: new Date(now - (63 - index) * 60_000).toISOString(),
         status: currentStatus,
-        ping: currentStatus === 0 ? null : Math.round(ping + Math.sin(index / 3) * 8)
+        ping: currentStatus === 0 ? null : Math.round(ping + Math.sin(index / 3) * 8),
+        message: currentStatus === 0 ? '关键字匹配失败，响应内容未包含预期文本。' : null
       }
     })
 
@@ -391,7 +401,7 @@ function demoMonitor(
     ping: beats.at(-1)?.ping ?? null,
     avgPing,
     lastChecked: beats.at(-1)?.time || null,
-    message: null,
+    message: status === 0 ? beats.at(-1)?.message || null : null,
     tags: [],
     beats
   }
