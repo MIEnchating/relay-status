@@ -29,8 +29,8 @@ npm -v
 
 ```bash
 npm i -g pm2
-git clone https://github.com/MIEnchating/kuma-status-board.git
-cd kuma-status-board
+git clone https://github.com/MIEnchating/relay-status.git
+cd relay-status
 cp .env.example .env
 ```
 
@@ -91,7 +91,7 @@ systemctl reload nginx
 ## 后续更新
 
 ```bash
-cd kuma-status-board
+cd relay-status
 git pull --ff-only
 npm ci
 npm run build
