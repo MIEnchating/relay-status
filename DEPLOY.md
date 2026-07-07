@@ -39,9 +39,12 @@ cp .env.example .env
 ```bash
 NUXT_UPTIME_KUMA_BASE_URL=https://status.relayai.tech
 NUXT_UPTIME_KUMA_SLUG=relayai
+NUXT_UPTIME_KUMA_METRICS_URL=https://status.relayai.tech/metrics
+NUXT_UPTIME_KUMA_METRICS_API_KEY=
 NUXT_OPENAI_STATUS_FEED_URL=https://status.openai.com/feed.atom
+NUXT_CLAUDE_STATUS_FEED_URL=https://status.claude.com/history.rss
 NUXT_PUBLIC_STATUS_TITLE=RelayAI 状态
-NUXT_PUBLIC_REFRESH_SECONDS=300
+NUXT_PUBLIC_REFRESH_SECONDS=60
 ```
 
 构建并启动：

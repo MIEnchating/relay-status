@@ -5,7 +5,10 @@ export default defineNuxtConfig({
   runtimeConfig: {
     uptimeKumaBaseUrl: process.env.NUXT_UPTIME_KUMA_BASE_URL || '',
     uptimeKumaSlug: process.env.NUXT_UPTIME_KUMA_SLUG || 'default',
+    uptimeKumaMetricsUrl: process.env.NUXT_UPTIME_KUMA_METRICS_URL || '',
+    uptimeKumaMetricsApiKey: process.env.NUXT_UPTIME_KUMA_METRICS_API_KEY || '',
     openaiStatusFeedUrl: process.env.NUXT_OPENAI_STATUS_FEED_URL || 'https://status.openai.com/feed.atom',
+    claudeStatusFeedUrl: process.env.NUXT_CLAUDE_STATUS_FEED_URL || 'https://status.claude.com/history.rss',
     public: {
       refreshSeconds: Number(process.env.NUXT_PUBLIC_REFRESH_SECONDS || 60),
       statusTitle: process.env.NUXT_PUBLIC_STATUS_TITLE || ''

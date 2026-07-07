@@ -62,6 +62,22 @@ type Beat = {
   message: string | null
 }
 
+type MetricsMonitor = {
+  id: string
+  name: string | null
+  type: string | null
+  url: string | null
+  status: KumaStatus | null
+  responseTime: number | null
+  uptime: Record<string, number>
+}
+
+type MetricsSnapshot = {
+  monitors: Record<string, MetricsMonitor>
+}
+
+type BadgeUptimeSnapshot = Record<string, number>
+
 type Monitor = {
   id: string
   name: string
@@ -71,10 +87,13 @@ type Monitor = {
   label: string
   tone: string
   uptime: number | null
+  uptime7d: number | null
+  uptime30d: number | null
   ping: number | null
   avgPing: number | null
   lastChecked: string | null
   message: string | null
+  latestIssue: Beat | null
   tags: string[]
   beats: Beat[]
 }
@@ -92,6 +111,11 @@ export default defineEventHandler(async (event) => {
     String(config.uptimeKumaBaseUrl || ''),
     String(config.uptimeKumaSlug || 'default')
   )
+  const metricsSource = getMetricsSource(
+    source.baseUrl,
+    String(config.uptimeKumaMetricsUrl || ''),
+    String(config.uptimeKumaMetricsApiKey || '')
+  )
   const updatedAt = new Date().toISOString()
 
   if (!source.baseUrl) {
@@ -99,12 +123,14 @@ export default defineEventHandler(async (event) => {
   }
 
   try {
-    const [page, heartbeat] = await Promise.all([
+    const [page, heartbeat, metrics] = await Promise.all([
       $fetch<KumaStatusPageResponse>(`${source.baseUrl}/api/status-page/${encodeURIComponent(source.slug)}`),
-      $fetch<KumaHeartbeatResponse>(`${source.baseUrl}/api/status-page/heartbeat/${encodeURIComponent(source.slug)}`)
+      $fetch<KumaHeartbeatResponse>(`${source.baseUrl}/api/status-page/heartbeat/${encodeURIComponent(source.slug)}`),
+      fetchMetricsSnapshot(metricsSource)
     ])
+    const badgeUptime = await fetchBadgeUptimeSnapshot(source.baseUrl, getPublicMonitorIds(page))
 
-    return normalizePayload(page, heartbeat, {
+    return normalizePayload(page, heartbeat, metrics, badgeUptime, {
       baseUrl: source.baseUrl,
       slug: source.slug,
       configured: true,
@@ -128,15 +154,25 @@ function getSource(rawBaseUrl: string, rawSlug: string) {
   return { baseUrl, slug }
 }
 
+function getMetricsSource(baseUrl: string, rawMetricsUrl: string, rawApiKey: string) {
+  const apiKey = rawApiKey.trim()
+  const metricsUrl = rawMetricsUrl.trim().replace(/\/+$/g, '')
+  const url = metricsUrl || (baseUrl ? `${baseUrl}/metrics` : '')
+
+  return { url, apiKey }
+}
+
 function normalizePayload(
   page: KumaStatusPageResponse,
   heartbeat: KumaHeartbeatResponse,
+  metrics: MetricsSnapshot | null,
+  badgeUptime: BadgeUptimeSnapshot,
   source: { baseUrl: string; slug: string; configured: boolean; updatedAt: string }
 ) {
   const groups = (page.publicGroupList || [])
     .map((group, index) => ({
       name: group.name || (index === 0 ? '核心服务' : `服务组 ${index + 1}`),
-      monitors: (group.monitorList || []).map((monitor) => normalizeMonitor(monitor, heartbeat))
+      monitors: (group.monitorList || []).map((monitor) => normalizeMonitor(monitor, heartbeat, metrics, badgeUptime))
     }))
     .filter((group) => group.monitors.length > 0)
 
@@ -161,8 +197,14 @@ function normalizePayload(
   }
 }
 
-function normalizeMonitor(monitor: KumaMonitor, heartbeat: KumaHeartbeatResponse): Monitor {
+function normalizeMonitor(
+  monitor: KumaMonitor,
+  heartbeat: KumaHeartbeatResponse,
+  metrics: MetricsSnapshot | null,
+  badgeUptime: BadgeUptimeSnapshot
+): Monitor {
   const id = String(monitor.id)
+  const metric = metrics?.monitors[id]
   const beats = (heartbeat.heartbeatList?.[id] || []).slice(-64).map((beat): Beat => ({
     time: normalizeDateTime(beat.time),
     status: normalizeStatus(beat.status),
@@ -170,10 +212,13 @@ function normalizeMonitor(monitor: KumaMonitor, heartbeat: KumaHeartbeatResponse
     message: normalizeMessage(beat.msg)
   }))
   const latest = beats.at(-1)
-  const status = latest?.status ?? 2
-  const uptime = normalizeUptime(heartbeat.uptimeList?.[`${id}_24`] ?? heartbeat.uptimeList?.[id])
+  const status = metric?.status ?? latest?.status ?? 2
+  const uptime = metric?.uptime['1d'] ?? normalizeUptime(heartbeat.uptimeList?.[`${id}_24`] ?? heartbeat.uptimeList?.[id])
+  const uptime7d = badgeUptime[id] ?? metric?.uptime['7d'] ?? null
+  const uptime30d = metric?.uptime['30d'] ?? null
   const pingValues = beats.map((beat) => beat.ping).filter((ping): ping is number => typeof ping === 'number')
-  const latestDownMessage = [...beats].reverse().find((beat) => beat.status === 0 && beat.message)?.message || null
+  const latestIssue = [...beats].reverse().find((beat) => beat.status === 0) || null
+  const latestDownMessage = latestIssue?.message || null
 
   return {
     id,
@@ -184,13 +229,150 @@ function normalizeMonitor(monitor: KumaMonitor, heartbeat: KumaHeartbeatResponse
     label: STATUS_COPY[status].label,
     tone: STATUS_COPY[status].tone,
     uptime,
-    ping: latest?.ping ?? null,
+    uptime7d,
+    uptime30d,
+    ping: metric?.responseTime ?? latest?.ping ?? null,
     avgPing: average(pingValues),
     lastChecked: latest?.time || null,
     message: status === 0 ? latest?.message || latestDownMessage : null,
+    latestIssue,
     tags: (monitor.tags || []).map((tag) => tag.name).filter((name): name is string => Boolean(name)),
     beats
   }
+}
+
+function getPublicMonitorIds(page: KumaStatusPageResponse) {
+  return (page.publicGroupList || [])
+    .flatMap((group) => group.monitorList || [])
+    .map((monitor) => String(monitor.id))
+}
+
+function fetchBadgeUptimeSnapshot(baseUrl: string, monitorIds: string[]): Promise<BadgeUptimeSnapshot> {
+  if (!baseUrl || monitorIds.length === 0) {
+    return Promise.resolve({})
+  }
+
+  return Promise.all(
+    monitorIds.map((id) =>
+      $fetch<string>(`${baseUrl}/api/badge/${encodeURIComponent(id)}/uptime/168`, {
+        responseType: 'text',
+        headers: {
+          accept: 'image/svg+xml, text/plain'
+        }
+      }).then((content) => [id, parseBadgeUptime(content)] as const)
+    )
+  ).then((items) => Object.fromEntries(items))
+}
+
+function parseBadgeUptime(content: string) {
+  const match = content.match(/(\d+(?:\.\d+)?)%/)
+
+  if (!match) {
+    throw new Error('无法解析 7 天可用率')
+  }
+
+  return Number(match[1])
+}
+
+function fetchMetricsSnapshot(source: { url: string; apiKey: string }): Promise<MetricsSnapshot | null> {
+  if (!source.url || !source.apiKey) {
+    return Promise.resolve(null)
+  }
+
+  const authorization = `Basic ${Buffer.from(`:${source.apiKey}`).toString('base64')}`
+
+  return $fetch<string>(source.url, {
+    responseType: 'text',
+    headers: {
+      accept: 'text/plain',
+      authorization
+    }
+  }).then((content) => parseMetricsSnapshot(content))
+}
+
+function parseMetricsSnapshot(content: string): MetricsSnapshot {
+  const monitors: Record<string, MetricsMonitor> = {}
+
+  for (const line of content.split('\n')) {
+    if (!line || line.startsWith('#')) {
+      continue
+    }
+
+    const match = line.match(/^(monitor_[^{\s]+)(?:\{([^}]*)\})?\s+([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)/i)
+
+    if (!match) {
+      continue
+    }
+
+    const [, metricName, rawLabels = '', rawValue] = match
+    const labels = parseMetricLabels(rawLabels)
+    const id = labels.monitor_id
+
+    if (!id) {
+      continue
+    }
+
+    const monitor = getMetricsMonitor(monitors, {
+      id,
+      name: labels.monitor_name || null,
+      type: labels.monitor_type || null,
+      url: labels.monitor_url || null
+    })
+    const value = Number(rawValue)
+
+    if (!Number.isFinite(value)) {
+      continue
+    }
+
+    if (metricName === 'monitor_status') {
+      monitor.status = normalizeStatus(value)
+    } else if (metricName === 'monitor_response_time') {
+      monitor.responseTime = normalizeResponseTime(value)
+    } else if (metricName === 'monitor_response_time_seconds' && monitor.responseTime === null) {
+      monitor.responseTime = normalizeResponseTime(value * 1000)
+    } else if (metricName === 'monitor_uptime_ratio' && labels.window) {
+      monitor.uptime[labels.window] = Number((value * 100).toFixed(3))
+    }
+  }
+
+  return { monitors }
+}
+
+function getMetricsMonitor(
+  monitors: Record<string, MetricsMonitor>,
+  seed: { id: string; name: string | null; type: string | null; url: string | null }
+) {
+  if (!monitors[seed.id]) {
+    monitors[seed.id] = {
+      id: seed.id,
+      name: seed.name,
+      type: seed.type,
+      url: seed.url,
+      status: null,
+      responseTime: null,
+      uptime: {}
+    }
+  }
+
+  const monitor = monitors[seed.id]
+  monitor.name ||= seed.name
+  monitor.type ||= seed.type
+  monitor.url ||= seed.url
+
+  return monitor
+}
+
+function parseMetricLabels(value: string) {
+  const labels: Record<string, string> = {}
+  const pattern = /([a-zA-Z_][a-zA-Z0-9_]*)="((?:\\.|[^"\\])*)"/g
+  let match = pattern.exec(value)
+
+  while (match) {
+    labels[match[1]] = match[2].replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+    match = pattern.exec(value)
+  }
+
+  return labels
 }
 
 function buildOverall(monitors: Monitor[]) {
@@ -295,9 +477,17 @@ function normalizeUptime(value: unknown) {
 }
 
 function normalizeNullableNumber(value: unknown) {
+  if (value === null || value === undefined || value === '') {
+    return null
+  }
+
   const numberValue = Number(value)
 
   return Number.isFinite(numberValue) ? numberValue : null
+}
+
+function normalizeResponseTime(value: number) {
+  return Number.isFinite(value) && value >= 0 ? Number(value.toFixed(0)) : null
 }
 
 function normalizeMessage(value: unknown) {
@@ -398,10 +588,13 @@ function demoMonitor(
     label: STATUS_COPY[status].label,
     tone: STATUS_COPY[status].tone,
     uptime,
+    uptime7d: uptime,
+    uptime30d: uptime,
     ping: beats.at(-1)?.ping ?? null,
     avgPing,
     lastChecked: beats.at(-1)?.time || null,
     message: status === 0 ? beats.at(-1)?.message || null : null,
+    latestIssue: [...beats].reverse().find((beat) => beat.status === 0) || null,
     tags: [],
     beats
   }

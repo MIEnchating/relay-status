@@ -18,8 +18,11 @@ npm run dev
 ```bash
 NUXT_UPTIME_KUMA_BASE_URL=https://你的-uptime-kuma-地址
 NUXT_UPTIME_KUMA_SLUG=default
+NUXT_UPTIME_KUMA_METRICS_URL=https://你的-uptime-kuma-地址/metrics
+NUXT_UPTIME_KUMA_METRICS_API_KEY=
+NUXT_CLAUDE_STATUS_FEED_URL=https://status.claude.com/history.rss
 NUXT_PUBLIC_STATUS_TITLE=Service Status
 NUXT_PUBLIC_REFRESH_SECONDS=60
 ```
 
-`NUXT_UPTIME_KUMA_BASE_URL` 填 Uptime Kuma 根地址，不要带 `/status/default`。如果没有配置 `.env`，页面会使用内置示例数据，方便先预览样式。
+`NUXT_UPTIME_KUMA_BASE_URL` 填 Uptime Kuma 根地址，不要带 `/status/default`。`NUXT_UPTIME_KUMA_METRICS_API_KEY` 只在 Nuxt 服务端读取，用来补充响应时间和可用率。没有配置 `.env` 时，页面会使用内置示例数据，方便先预览样式。

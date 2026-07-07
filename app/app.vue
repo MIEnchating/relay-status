@@ -2,7 +2,9 @@
 import {
   AlertTriangle,
   ExternalLink,
+  Moon,
   RefreshCw,
+  Sun,
   Timer,
   Wrench
 } from 'lucide-vue-next'
@@ -58,9 +60,13 @@ type Monitor = {
   label: string
   tone: string
   uptime: number | null
+  uptime7d: number | null
+  uptime30d: number | null
   ping: number | null
   avgPing: number | null
   lastChecked: string | null
+  message: string | null
+  latestIssue: Beat | null
   tags: string[]
   beats: Beat[]
 }
@@ -72,14 +78,27 @@ type Beat = {
   message: string | null
 }
 
-type OpenAIStatusPayload = {
-  source: string
-  feedUrl: string
-  updatedAt: string
-  items: OpenAIStatusItem[]
+type BeatSlot = Beat & {
+  isPlaceholder: boolean
 }
 
-type OpenAIStatusItem = {
+type ThemeMode = 'light' | 'dark'
+
+type OfficialStatusPayload = {
+  updatedAt: string
+  sources: OfficialStatusSource[]
+}
+
+type OfficialStatusSource = {
+  id: string
+  name: string
+  feedUrl: string
+  homepage: string
+  updatedAt: string
+  items: OfficialStatusItem[]
+}
+
+type OfficialStatusItem = {
   id: string
   title: string
   summary: string
@@ -90,14 +109,17 @@ type OpenAIStatusItem = {
 }
 
 const config = useRuntimeConfig()
+const heartbeatSlotCount = 36
 const defaultRefreshSeconds = Math.max(10, Number(config.public.refreshSeconds) || 300)
 const refreshCountdown = ref(defaultRefreshSeconds)
 const isRefreshing = ref(false)
+const themeMode = ref<ThemeMode>('light')
+const isDarkTheme = computed(() => themeMode.value === 'dark')
 
 const { data, error, refresh } = await useFetch<StatusPayload>('/api/status', {
   default: () => null
 })
-const { data: openaiStatus, error: openaiStatusError, refresh: refreshOpenAIStatus } = await useFetch<OpenAIStatusPayload>('/api/openai-status', {
+const { data: officialStatus, error: officialStatusError, refresh: refreshOfficialStatus } = await useFetch<OfficialStatusPayload>('/api/official-status', {
   default: () => null
 })
 
@@ -109,24 +131,79 @@ const overall = computed(() => data.value?.overall)
 const groups = computed(() => data.value?.groups || [])
 const incidents = computed(() => data.value?.incidents || [])
 const maintenanceList = computed(() => data.value?.maintenanceList || [])
-const openaiItems = computed(() => openaiStatus.value?.items || [])
-const hasOpenAIStatus = computed(() => openaiItems.value.length > 0 || Boolean(openaiStatusError.value))
-const statusCounts = computed(() => {
-  const current = overall.value
+const officialSources = computed(() => officialStatus.value?.sources || [])
+const hasOfficialStatus = computed(() => officialSources.value.some((source) => source.items.length > 0) || Boolean(officialStatusError.value))
+const selectedGroup = ref('all')
+const selectedOfficialSource = ref('openai')
+const groupFilters = computed(() => {
+  const allCount = groups.value.reduce((sum, group) => sum + group.monitors.length, 0)
 
   return [
-    { label: '正常服务', value: current?.up ?? 0, tone: 'up' },
-    { label: '故障服务', value: current?.down ?? 0, tone: 'down' }
+    { id: 'all', label: '全部', count: allCount },
+    ...groups.value.map((group) => ({
+      id: group.name,
+      label: group.name,
+      count: group.monitors.length
+    }))
+  ]
+})
+const visibleGroups = computed(() => {
+  if (selectedGroup.value === 'all') {
+    return groups.value
+  }
+
+  return groups.value.filter((group) => group.name === selectedGroup.value)
+})
+const visibleMonitors = computed(() => visibleGroups.value.flatMap((group) => group.monitors))
+const visibleOfficialSource = computed(() => {
+  return officialSources.value.find((source) => source.id === selectedOfficialSource.value) || officialSources.value[0] || null
+})
+const statusCounts = computed(() => {
+  const monitors = visibleMonitors.value
+
+  return [
+    { label: '正常服务', value: monitors.filter((monitor) => monitor.status === 1).length, tone: 'up' },
+    { label: '故障服务', value: monitors.filter((monitor) => monitor.status === 0).length, tone: 'down' },
+    { label: '等待服务', value: monitors.filter((monitor) => monitor.status === 2).length, tone: 'pending' },
+    { label: '维护服务', value: monitors.filter((monitor) => monitor.status === 3).length, tone: 'maintenance' }
   ]
 })
 
 useHead(() => ({
-  title: pageTitle.value
+  title: pageTitle.value,
+  htmlAttrs: {
+    'data-theme': themeMode.value
+  },
+  meta: [
+    {
+      name: 'theme-color',
+      content: isDarkTheme.value ? '#151513' : '#f8faf7'
+    }
+  ]
 }))
+
+watch(groupFilters, (items) => {
+  if (!items.some((item) => item.id === selectedGroup.value)) {
+    selectedGroup.value = 'all'
+  }
+})
+
+watch(officialSources, (sources) => {
+  if (!sources.length || sources.some((source) => source.id === selectedOfficialSource.value)) {
+    return
+  }
+
+  selectedOfficialSource.value = sources.find((source) => source.id === 'openai')?.id || sources[0].id
+}, { immediate: true })
 
 let refreshTimer: ReturnType<typeof window.setInterval> | undefined
 
 onMounted(() => {
+  const savedTheme = window.localStorage.getItem('relay-status-theme')
+  if (savedTheme === 'light' || savedTheme === 'dark') {
+    themeMode.value = savedTheme
+  }
+
   refreshTimer = window.setInterval(() => {
     if (refreshCountdown.value <= 1) {
       refreshAll()
@@ -147,20 +224,29 @@ function statusClass(tone?: string) {
   return `is-${tone || 'pending'}`
 }
 
+function setTheme(mode: ThemeMode) {
+  themeMode.value = mode
+  window.localStorage.setItem('relay-status-theme', mode)
+}
+
 function refreshAll() {
   if (isRefreshing.value) {
     return
   }
 
   isRefreshing.value = true
-  Promise.all([refresh(), refreshOpenAIStatus()])
+  Promise.all([refresh(), refreshOfficialStatus()])
     .finally(() => {
       isRefreshing.value = false
       refreshCountdown.value = defaultRefreshSeconds
     })
 }
 
-function beatClass(status: 0 | 1 | 2 | 3) {
+function beatClass(beat: BeatSlot) {
+  if (beat.isPlaceholder) {
+    return 'is-empty'
+  }
+
   const toneMap = {
     0: 'is-down',
     1: 'is-up',
@@ -168,7 +254,7 @@ function beatClass(status: 0 | 1 | 2 | 3) {
     3: 'is-maintenance'
   }
 
-  return toneMap[status]
+  return toneMap[beat.status]
 }
 
 function statusLabel(status: 0 | 1 | 2 | 3) {
@@ -206,38 +292,58 @@ function formatMonitorType(value: string | null | undefined) {
   return typeMap[key] || value || '服务'
 }
 
-function formatBeatTooltip(beat: Beat) {
+function formatBeatTooltip(beat: BeatSlot) {
   const parts = [formatDateTimeWithSeconds(beat.time), statusLabel(beat.status)]
 
-  if (beat.status === 0) {
-    parts.push(beat.message || '未返回故障原因')
-  } else {
+  if (beat.status !== 0) {
     parts.push(`延迟 ${formatPing(beat.ping)}`)
   }
 
   return parts.join(' · ')
 }
 
-function recentBeats(beats: Beat[]) {
-  return beats.slice(-36)
+function recentBeatSlots(beats: Beat[]) {
+  const recent = beats.slice(-heartbeatSlotCount).map((beat): BeatSlot => ({
+    ...beat,
+    isPlaceholder: false
+  }))
+  const missingCount = heartbeatSlotCount - recent.length
+
+  if (missingCount <= 0) {
+    return recent
+  }
+
+  const placeholders = Array.from({ length: missingCount }, (): BeatSlot => ({
+    time: null,
+    status: 2,
+    ping: null,
+    message: null,
+    isPlaceholder: true
+  }))
+
+  return [...placeholders, ...recent]
 }
 
-function beatStyle(beat: Beat) {
+function beatStyle(beat: BeatSlot) {
   return {
     '--beat-color': beatColor(beat)
   }
 }
 
-function beatColor(beat: Beat) {
+function beatColor(beat: BeatSlot) {
+  if (beat.isPlaceholder) {
+    return 'var(--beat-empty)'
+  }
+
   if (beat.status === 0) {
-    return '#c64545'
+    return 'var(--error)'
   }
 
   if (beat.status === 2) {
-    return '#8e8b82'
+    return 'var(--muted-soft)'
   }
 
-  return '#5db872'
+  return 'var(--success)'
 }
 
 function formatPercent(value: number | null | undefined) {
@@ -249,7 +355,7 @@ function formatPercent(value: number | null | undefined) {
 }
 
 function formatPing(value: number | null | undefined) {
-  if (typeof value !== 'number') {
+  if (typeof value !== 'number' || value < 0) {
     return '暂无'
   }
 
@@ -262,7 +368,9 @@ function formatRelativeTime(value: string | null | undefined) {
   }
 
   const date = new Date(value)
-  const diffSeconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000))
+  const referenceTime = new Date(data.value?.updatedAt || '').getTime()
+  const now = Number.isNaN(referenceTime) ? Date.now() : referenceTime
+  const diffSeconds = Math.max(0, Math.floor((now - date.getTime()) / 1000))
 
   if (diffSeconds < 60) {
     return '刚刚'
@@ -318,8 +426,35 @@ function formatDateTimeWithSeconds(value: string | null | undefined) {
   })
 }
 
-function openaiItemClass(tone: OpenAIStatusItem['tone']) {
+function officialItemClass(tone: OfficialStatusItem['tone']) {
   return `is-${tone}`
+}
+
+function officialSourceTone(source: OfficialStatusSource) {
+  const activeItems = officialActiveItems(source)
+
+  if (!activeItems.length) {
+    return 'normal'
+  }
+
+  return activeItems.some(isSevereOfficialItem) ? 'danger' : 'warning'
+}
+
+function officialActiveItems(source: OfficialStatusSource) {
+  return source.items.filter((item) => item.tone === 'active')
+}
+
+function officialTabCount(source: OfficialStatusSource) {
+  return officialActiveItems(source).length || source.items.length
+}
+
+function officialTabClass(source: OfficialStatusSource) {
+  return `is-${officialSourceTone(source)}`
+}
+
+function isSevereOfficialItem(item: OfficialStatusItem) {
+  return /outage|error|errors|failure|failures|failed|unavailable|down|not working|denied|故障|异常|错误|不可用|失败/i
+    .test(`${item.status} ${item.title} ${item.summary}`)
 }
 </script>
 
@@ -335,9 +470,34 @@ function openaiItemClass(tone: OpenAIStatusItem['tone']) {
       <span>正在显示示例数据。复制 .env.example 为 .env 后填入 Uptime Kuma 地址即可接入真实状态页。</span>
     </div>
 
-    <div class="monitor-layout" :class="{ 'has-rail': hasOpenAIStatus }">
+    <div class="monitor-layout" :class="{ 'has-rail': hasOfficialStatus }">
       <div class="service-stack">
         <section class="refresh-toolbar" aria-label="刷新控制">
+          <div class="theme-switcher" role="group" aria-label="主题切换">
+            <button
+              type="button"
+              class="theme-button"
+              :class="{ 'is-active': themeMode === 'light' }"
+              :aria-pressed="themeMode === 'light'"
+              title="亮色主题"
+              @click="setTheme('light')"
+            >
+              <Sun :size="15" />
+              <span>亮色</span>
+            </button>
+            <button
+              type="button"
+              class="theme-button"
+              :class="{ 'is-active': themeMode === 'dark' }"
+              :aria-pressed="themeMode === 'dark'"
+              title="暗色主题"
+              @click="setTheme('dark')"
+            >
+              <Moon :size="15" />
+              <span>暗色</span>
+            </button>
+          </div>
+
           <span class="refresh-countdown">
             <Timer :size="15" />
             {{ isRefreshing ? '正在刷新' : `${refreshCountdown} 秒后刷新` }}
@@ -346,6 +506,20 @@ function openaiItemClass(tone: OpenAIStatusItem['tone']) {
           <button class="refresh-button" type="button" :disabled="isRefreshing" @click="refreshAll">
             <RefreshCw :size="16" :class="{ 'is-spinning': isRefreshing }" />
             <span>刷新</span>
+          </button>
+        </section>
+
+        <section v-if="groupFilters.length > 1" class="group-filter" aria-label="分组筛选">
+          <button
+            v-for="item in groupFilters"
+            :key="item.id"
+            class="group-filter-button"
+            :class="{ 'is-active': selectedGroup === item.id }"
+            type="button"
+            @click="selectedGroup = item.id"
+          >
+            <span>{{ item.label }}</span>
+            <strong>{{ item.count }}</strong>
           </button>
         </section>
 
@@ -380,7 +554,7 @@ function openaiItemClass(tone: OpenAIStatusItem['tone']) {
           </article>
         </section>
 
-        <section v-for="group in groups" :key="group.name" class="service-section">
+        <section v-for="group in visibleGroups" :key="group.name" class="service-section">
           <div class="section-heading">
             <div>
               <h2>{{ group.name }}</h2>
@@ -398,13 +572,17 @@ function openaiItemClass(tone: OpenAIStatusItem['tone']) {
                     <p>{{ formatMonitorType(monitor.type) }}</p>
                   </div>
                 </div>
-                <span class="service-state">{{ monitor.label }}</span>
+                <span class="service-state" :class="statusClass(monitor.tone)">{{ monitor.label }}</span>
               </div>
 
               <div class="service-snapshot">
                 <div>
                   <span>24 小时可用率</span>
                   <strong>{{ formatPercent(monitor.uptime) }}</strong>
+                </div>
+                <div>
+                  <span>7 天可用率</span>
+                  <strong>{{ formatPercent(monitor.uptime7d) }}</strong>
                 </div>
                 <div>
                   <span>延迟</span>
@@ -419,22 +597,22 @@ function openaiItemClass(tone: OpenAIStatusItem['tone']) {
               <div
                 class="sparkline"
                 aria-label="近期心跳记录"
-                :style="{ '--beat-count': String(recentBeats(monitor.beats).length) }"
+                :style="{ '--beat-count': String(heartbeatSlotCount) }"
               >
                 <span
-                  v-for="(beat, index) in recentBeats(monitor.beats)"
-                  :key="`${monitor.id}-${beat.time || index}`"
+                  v-for="(beat, index) in recentBeatSlots(monitor.beats)"
+                  :key="beat.isPlaceholder ? `${monitor.id}-empty-${index}` : `${monitor.id}-${beat.time || index}`"
                   class="beat"
-                  :class="beatClass(beat.status)"
+                  :class="beatClass(beat)"
                   :style="beatStyle(beat)"
-                  :aria-label="formatBeatTooltip(beat)"
-                  tabindex="0"
+                  :aria-label="beat.isPlaceholder ? '暂无心跳记录' : formatBeatTooltip(beat)"
+                  :aria-hidden="beat.isPlaceholder"
+                  :tabindex="beat.isPlaceholder ? -1 : 0"
                 >
-                  <span class="beat-tooltip" role="tooltip">
+                  <span v-if="!beat.isPlaceholder" class="beat-tooltip" role="tooltip">
                     <strong>{{ statusLabel(beat.status) }}</strong>
                     <span>{{ formatDateTimeWithSeconds(beat.time) }}</span>
-                    <span v-if="beat.status === 0">原因：{{ beat.message || '未返回故障原因' }}</span>
-                    <span v-else>延迟 {{ formatPing(beat.ping) }}</span>
+                    <span v-if="beat.status !== 0">延迟 {{ formatPing(beat.ping) }}</span>
                   </span>
                 </span>
               </div>
@@ -443,41 +621,65 @@ function openaiItemClass(tone: OpenAIStatusItem['tone']) {
         </section>
       </div>
 
-      <aside v-if="hasOpenAIStatus" class="official-rail" aria-label="OpenAI 官方状态">
+      <aside v-if="hasOfficialStatus" class="official-rail" aria-label="官方状态">
         <section class="openai-section">
           <div class="section-heading">
             <div>
               <p>外部官方消息</p>
-              <h2>OpenAI 状态</h2>
+              <h2>官方状态</h2>
             </div>
-            <span>RSS 自动同步</span>
+            <span>OpenAI / Claude</span>
           </div>
 
-          <div v-if="openaiStatusError" class="notice is-error">
+          <div v-if="officialStatusError" class="notice is-error">
             <AlertTriangle :size="18" />
-            <span>{{ openaiStatusError.statusMessage || openaiStatusError.message }}</span>
+            <span>{{ officialStatusError.statusMessage || officialStatusError.message }}</span>
           </div>
 
-          <div v-else class="openai-list">
-            <a
-              v-for="item in openaiItems"
-              :key="item.id"
-              class="openai-item"
-              :class="openaiItemClass(item.tone)"
-              :href="item.link"
-              target="_blank"
-              rel="noreferrer"
-            >
-              <div>
-                <div class="openai-meta">
-                  <span>{{ item.status }}</span>
-                  <time>{{ formatRelativeTime(item.publishedAt) }}</time>
-                </div>
-                <h3>{{ item.title }}</h3>
-                <p>{{ item.summary }}</p>
+          <div v-else-if="visibleOfficialSource" class="official-status-stack">
+            <div class="official-tabs" role="tablist" aria-label="官方状态来源">
+              <button
+                v-for="source in officialSources"
+                :key="source.id"
+                type="button"
+                class="official-tab"
+                :class="[officialTabClass(source), { 'is-active': selectedOfficialSource === source.id }]"
+                role="tab"
+                :aria-selected="selectedOfficialSource === source.id"
+                @click="selectedOfficialSource = source.id"
+              >
+                <span class="official-tab-label">{{ source.name }}</span>
+                <span class="official-tab-count">{{ officialTabCount(source) }}</span>
+              </button>
+            </div>
+
+            <template v-if="visibleOfficialSource.items.length">
+              <div class="openai-list">
+                <a
+                  v-for="item in visibleOfficialSource.items"
+                  :key="`${visibleOfficialSource.id}-${item.id}`"
+                  class="openai-item"
+                  :class="officialItemClass(item.tone)"
+                  :href="item.link"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <div>
+                    <div class="openai-meta">
+                      <span>{{ item.status }}</span>
+                      <time>{{ formatRelativeTime(item.publishedAt) }}</time>
+                    </div>
+                    <h3>{{ item.title }}</h3>
+                    <p>{{ item.summary }}</p>
+                  </div>
+                  <ExternalLink :size="16" />
+                </a>
               </div>
-              <ExternalLink :size="16" />
-            </a>
+            </template>
+
+            <div v-else class="notice">
+              <span>{{ visibleOfficialSource.name }} 暂无官方消息</span>
+            </div>
           </div>
         </section>
       </aside>

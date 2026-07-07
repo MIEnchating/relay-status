@@ -4,6 +4,10 @@ node_modules
 .data
 .env
 .nuxt-dev*.log
+work-dev-server.*.log
+.playwright-cli/
+work/
 dist
 *.local
 preview*.png
+output/
