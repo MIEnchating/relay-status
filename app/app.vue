@@ -110,7 +110,7 @@ type OfficialStatusItem = {
 
 const config = useRuntimeConfig()
 const heartbeatSlotCount = 36
-const defaultRefreshSeconds = Math.max(10, Number(config.public.refreshSeconds) || 300)
+const defaultRefreshSeconds = Math.max(10, Number(config.public.refreshSeconds) || 60)
 const refreshCountdown = ref(defaultRefreshSeconds)
 const isRefreshing = ref(false)
 const themeMode = ref<ThemeMode>('light')
