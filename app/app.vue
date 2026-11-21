@@ -1,11 +1,17 @@
 <script setup lang="ts">
 import {
+  Activity,
+  AlarmClock,
+  AlertCircle,
   AlertTriangle,
+  ArrowDown,
+  Check,
   ExternalLink,
+  Globe,
+  Layers,
   Moon,
   RefreshCw,
   Sun,
-  Timer,
   Wrench
 } from 'lucide-vue-next'
 
@@ -131,6 +137,7 @@ const overall = computed(() => data.value?.overall)
 const groups = computed(() => data.value?.groups || [])
 const incidents = computed(() => data.value?.incidents || [])
 const maintenanceList = computed(() => data.value?.maintenanceList || [])
+const hasAlerts = computed(() => Boolean(incidents.value.length || maintenanceList.value.length))
 const officialSources = computed(() => officialStatus.value?.sources || [])
 const hasOfficialStatus = computed(() => officialSources.value.some((source) => source.items.length > 0) || Boolean(officialStatusError.value))
 const selectedGroup = ref('all')
@@ -154,30 +161,26 @@ const visibleGroups = computed(() => {
 
   return groups.value.filter((group) => group.name === selectedGroup.value)
 })
-const visibleMonitors = computed(() => visibleGroups.value.flatMap((group) => group.monitors))
 const visibleOfficialSource = computed(() => {
   return officialSources.value.find((source) => source.id === selectedOfficialSource.value) || officialSources.value[0] || null
 })
-const statusCounts = computed(() => {
-  const monitors = visibleMonitors.value
-
-  return [
-    { label: '正常服务', value: monitors.filter((monitor) => monitor.status === 1).length, tone: 'up' },
-    { label: '故障服务', value: monitors.filter((monitor) => monitor.status === 0).length, tone: 'down' },
-    { label: '等待服务', value: monitors.filter((monitor) => monitor.status === 2).length, tone: 'pending' },
-    { label: '维护服务', value: monitors.filter((monitor) => monitor.status === 3).length, tone: 'maintenance' }
-  ]
-})
+const statusCounts = [
+  { label: '正常服务', tone: 'up', icon: Check },
+  { label: '故障服务', tone: 'down', icon: AlertCircle },
+  { label: '等待检测', tone: 'pending', icon: AlarmClock },
+  { label: '维护服务', tone: 'maintenance', icon: Wrench }
+] as const
 
 useHead(() => ({
   title: pageTitle.value,
   htmlAttrs: {
+    lang: 'zh-CN',
     'data-theme': themeMode.value
   },
   meta: [
     {
       name: 'theme-color',
-      content: isDarkTheme.value ? '#151513' : '#f8faf7'
+      content: isDarkTheme.value ? '#151513' : '#faf9f5'
     }
   ]
 }))
@@ -224,9 +227,9 @@ function statusClass(tone?: string) {
   return `is-${tone || 'pending'}`
 }
 
-function setTheme(mode: ThemeMode) {
-  themeMode.value = mode
-  window.localStorage.setItem('relay-status-theme', mode)
+function toggleTheme() {
+  themeMode.value = isDarkTheme.value ? 'light' : 'dark'
+  window.localStorage.setItem('relay-status-theme', themeMode.value)
 }
 
 function refreshAll() {
@@ -324,26 +327,22 @@ function recentBeatSlots(beats: Beat[]) {
   return [...placeholders, ...recent]
 }
 
-function beatStyle(beat: BeatSlot) {
-  return {
-    '--beat-color': beatColor(beat)
-  }
-}
-
-function beatColor(beat: BeatSlot) {
-  if (beat.isPlaceholder) {
-    return 'var(--beat-empty)'
+function moveBeatFocus(event: KeyboardEvent) {
+  const steps: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1 }
+  const step = steps[event.key]
+  if (!step) {
+    return
   }
 
-  if (beat.status === 0) {
-    return 'var(--error)'
+  const history = event.currentTarget as HTMLElement
+  const beats = [...history.querySelectorAll<HTMLButtonElement>('button.beat')]
+  const index = beats.indexOf(document.activeElement as HTMLButtonElement)
+  if (index < 0) {
+    return
   }
 
-  if (beat.status === 2) {
-    return 'var(--muted-soft)'
-  }
-
-  return 'var(--success)'
+  event.preventDefault()
+  beats[Math.max(0, Math.min(beats.length - 1, index + step))]?.focus()
 }
 
 function formatPercent(value: number | null | undefined) {
@@ -351,7 +350,7 @@ function formatPercent(value: number | null | undefined) {
     return '暂无'
   }
 
-  return `${Math.round(value)}%`
+  return `${value.toLocaleString('zh-CN', { maximumFractionDigits: 3 })}%`
 }
 
 function formatPing(value: number | null | undefined) {
@@ -426,10 +425,6 @@ function formatDateTimeWithSeconds(value: string | null | undefined) {
   })
 }
 
-function officialItemClass(tone: OfficialStatusItem['tone']) {
-  return `is-${tone}`
-}
-
 function officialSourceTone(source: OfficialStatusSource) {
   const activeItems = officialActiveItems(source)
 
@@ -459,230 +454,280 @@ function isSevereOfficialItem(item: OfficialStatusItem) {
 </script>
 
 <template>
-  <main class="page-shell" :class="statusClass(overall?.tone)">
-    <div v-if="error" class="notice is-error">
-      <AlertTriangle :size="18" />
+  <header class="topbar">
+    <div class="topbar-inner page-width">
+      <a class="brand" href="#status">
+        <span class="brand-icon"><Activity :size="21" aria-hidden="true" /></span>
+        <span>{{ pageTitle }}</span>
+      </a>
+
+      <nav class="page-nav" aria-label="页面导航">
+        <a href="#services">服务监控</a>
+        <a v-if="hasAlerts" href="#events">事件与维护</a>
+        <a v-if="hasOfficialStatus" href="#official">官方动态</a>
+      </nav>
+
+      <div class="toolbar" role="group" aria-label="页面设置">
+        <span v-if="data && !data.configured" class="demo-label">示例数据</span>
+        <button
+          class="icon-button"
+          type="button"
+          :aria-label="isDarkTheme ? '切换到亮色主题' : '切换到暗色主题'"
+          :title="isDarkTheme ? '切换到亮色主题' : '切换到暗色主题'"
+          @click="toggleTheme"
+        >
+          <Sun v-if="isDarkTheme" :size="18" aria-hidden="true" />
+          <Moon v-else :size="18" aria-hidden="true" />
+        </button>
+        <button class="icon-button" type="button" title="刷新状态" aria-label="刷新状态" :disabled="isRefreshing" @click="refreshAll">
+          <RefreshCw :size="17" :class="{ 'is-spinning': isRefreshing }" aria-hidden="true" />
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="status" class="page-width dashboard">
+    <div v-if="error" class="notice is-error" role="alert">
+      <AlertTriangle :size="18" aria-hidden="true" />
       <span>{{ error.statusMessage || error.message }}</span>
     </div>
 
-    <div v-else-if="data && !data.configured" class="notice">
-      <AlertTriangle :size="18" />
-      <span>正在显示示例数据。复制 .env.example 为 .env 后填入 Uptime Kuma 地址即可接入真实状态页。</span>
-    </div>
+    <section class="status-hero" :class="statusClass(overall?.tone)" aria-labelledby="status-heading">
+      <div class="hero-copy">
+        <div class="hero-label">
+          <span class="status-dot" aria-hidden="true" />
+          系统状态
+        </div>
+        <h1 id="status-heading">{{ overall?.label || '状态暂不可用' }}</h1>
+        <p>{{ overall?.summary || '请稍后刷新，重新获取服务状态。' }}</p>
 
-    <div class="monitor-layout" :class="{ 'has-rail': hasOfficialStatus }">
-      <div class="service-stack">
-        <section class="refresh-toolbar" aria-label="刷新控制">
-          <div class="theme-switcher" role="group" aria-label="主题切换">
-            <button
-              type="button"
-              class="theme-button"
-              :class="{ 'is-active': themeMode === 'light' }"
-              :aria-pressed="themeMode === 'light'"
-              title="亮色主题"
-              @click="setTheme('light')"
-            >
-              <Sun :size="15" />
-              <span>亮色</span>
-            </button>
-            <button
-              type="button"
-              class="theme-button"
-              :class="{ 'is-active': themeMode === 'dark' }"
-              :aria-pressed="themeMode === 'dark'"
-              title="暗色主题"
-              @click="setTheme('dark')"
-            >
-              <Moon :size="15" />
-              <span>暗色</span>
-            </button>
-          </div>
-
-          <span class="refresh-countdown">
-            <Timer :size="15" />
+        <div class="hero-actions">
+          <a class="hero-link" href="#services">
+            查看服务
+            <ArrowDown :size="15" aria-hidden="true" />
+          </a>
+          <span class="refresh-timer">
+            <AlarmClock :size="15" aria-hidden="true" />
             {{ isRefreshing ? '正在刷新' : `${refreshCountdown} 秒后刷新` }}
           </span>
-
-          <button class="refresh-button" type="button" :disabled="isRefreshing" @click="refreshAll">
-            <RefreshCw :size="16" :class="{ 'is-spinning': isRefreshing }" />
-            <span>刷新</span>
-          </button>
-        </section>
-
-        <section v-if="groupFilters.length > 1" class="group-filter" aria-label="分组筛选">
-          <button
-            v-for="item in groupFilters"
-            :key="item.id"
-            class="group-filter-button"
-            :class="{ 'is-active': selectedGroup === item.id }"
-            type="button"
-            @click="selectedGroup = item.id"
-          >
-            <span>{{ item.label }}</span>
-            <strong>{{ item.count }}</strong>
-          </button>
-        </section>
-
-        <section class="status-counts" aria-label="状态汇总">
-          <article v-for="item in statusCounts" :key="item.label" class="count-card" :class="statusClass(item.tone)">
-            <span>{{ item.label }}</span>
-            <strong>{{ item.value }}</strong>
-          </article>
-        </section>
-
-        <section v-if="incidents.length || maintenanceList.length" class="alerts-band">
-          <article v-for="incident in incidents" :key="`incident-${incident.title}-${incident.createdAt}`" class="alert-card">
-            <AlertTriangle :size="20" />
-            <div>
-              <div class="alert-heading">
-                <strong>{{ incident.title }}</strong>
-                <time>{{ formatDateTime(incident.createdAt) }}</time>
-              </div>
-              <p>{{ incident.content }}</p>
-            </div>
-          </article>
-
-          <article v-for="item in maintenanceList" :key="`maintenance-${item.title}-${item.startAt}`" class="alert-card is-maintenance">
-            <Wrench :size="20" />
-            <div>
-              <div class="alert-heading">
-                <strong>{{ item.title }}</strong>
-                <time>{{ formatDateTime(item.startAt) }} - {{ formatDateTime(item.endAt) }}</time>
-              </div>
-              <p>{{ item.description }}</p>
-            </div>
-          </article>
-        </section>
-
-        <section v-for="group in visibleGroups" :key="group.name" class="service-section">
-          <div class="section-heading">
-            <div>
-              <h2>{{ group.name }}</h2>
-            </div>
-            <span>{{ group.monitors.length }} 项服务</span>
-          </div>
-
-          <div class="service-grid">
-            <article v-for="monitor in group.monitors" :key="monitor.id" class="service-card" :class="statusClass(monitor.tone)">
-              <div class="service-header">
-                <div>
-                  <span class="service-dot" :class="statusClass(monitor.tone)" aria-hidden="true" />
-                  <div>
-                    <h3>{{ monitor.name }}</h3>
-                    <p>{{ formatMonitorType(monitor.type) }}</p>
-                  </div>
-                </div>
-                <span class="service-state" :class="statusClass(monitor.tone)">{{ monitor.label }}</span>
-              </div>
-
-              <div class="service-snapshot">
-                <div>
-                  <span>24 小时可用率</span>
-                  <strong>{{ formatPercent(monitor.uptime) }}</strong>
-                </div>
-                <div>
-                  <span>7 天可用率</span>
-                  <strong>{{ formatPercent(monitor.uptime7d) }}</strong>
-                </div>
-                <div>
-                  <span>延迟</span>
-                  <strong>{{ formatPing(monitor.ping ?? monitor.avgPing) }}</strong>
-                </div>
-                <div>
-                  <span>最近检测</span>
-                  <strong>{{ formatRelativeTime(monitor.lastChecked) }}</strong>
-                </div>
-              </div>
-
-              <div
-                class="sparkline"
-                aria-label="近期心跳记录"
-                :style="{ '--beat-count': String(heartbeatSlotCount) }"
-              >
-                <span
-                  v-for="(beat, index) in recentBeatSlots(monitor.beats)"
-                  :key="beat.isPlaceholder ? `${monitor.id}-empty-${index}` : `${monitor.id}-${beat.time || index}`"
-                  class="beat"
-                  :class="beatClass(beat)"
-                  :style="beatStyle(beat)"
-                  :aria-label="beat.isPlaceholder ? '暂无心跳记录' : formatBeatTooltip(beat)"
-                  :aria-hidden="beat.isPlaceholder"
-                  :tabindex="beat.isPlaceholder ? -1 : 0"
-                >
-                  <span v-if="!beat.isPlaceholder" class="beat-tooltip" role="tooltip">
-                    <strong>{{ statusLabel(beat.status) }}</strong>
-                    <span>{{ formatDateTimeWithSeconds(beat.time) }}</span>
-                    <span v-if="beat.status !== 0">延迟 {{ formatPing(beat.ping) }}</span>
-                  </span>
-                </span>
-              </div>
-            </article>
-          </div>
-        </section>
+        </div>
       </div>
 
-      <aside v-if="hasOfficialStatus" class="official-rail" aria-label="官方状态">
-        <section class="openai-section">
-          <div class="section-heading">
-            <div>
-              <p>外部官方消息</p>
-              <h2>官方状态</h2>
-            </div>
-            <span>OpenAI / Claude</span>
+      <div class="pulse-visual" aria-hidden="true">
+        <div class="pulse-axis"></div>
+        <div class="pulse-ring pulse-ring-outer"></div>
+        <div class="pulse-ring pulse-ring-middle"></div>
+        <div class="pulse-ring pulse-ring-inner"></div>
+        <div class="pulse-wave"></div>
+        <div class="pulse-orbit"><span></span></div>
+        <div class="pulse-core">
+          <Activity :size="46" :stroke-width="1.5" />
+        </div>
+      </div>
+    </section>
+
+    <section v-if="overall" class="status-counts" aria-label="全部服务状态汇总">
+      <div v-for="item in statusCounts" :key="item.tone" class="count-card" :class="statusClass(item.tone)">
+        <span class="count-icon"><component :is="item.icon" :size="18" aria-hidden="true" /></span>
+        <div class="count-copy">
+          <span>{{ item.label }}</span>
+          <strong>{{ overall[item.tone] }}</strong>
+        </div>
+      </div>
+    </section>
+
+    <div class="monitor-layout" :class="{ 'has-rail': hasOfficialStatus }">
+      <section id="services" class="service-stack" aria-labelledby="services-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="services-heading">服务监控</h2>
+            <p v-if="overall">共 {{ overall.total }} 项服务</p>
+          </div>
+          <div v-if="groupFilters.length > 1" class="group-filter" role="group" aria-label="分组筛选">
+            <button
+              v-for="item in groupFilters"
+              :key="item.id"
+              class="group-filter-button"
+              type="button"
+              :aria-pressed="selectedGroup === item.id"
+              @click="selectedGroup = item.id"
+            >
+              {{ item.label }} <span>{{ item.count }}</span>
+            </button>
+          </div>
+        </div>
+
+        <div v-if="!visibleGroups.length" class="empty-state">
+          <Layers :size="22" aria-hidden="true" />
+          <p>{{ error ? '服务监控暂不可用' : '暂无监控服务' }}</p>
+        </div>
+
+        <Transition name="panel">
+          <div v-if="visibleGroups.length" :key="selectedGroup" class="service-groups">
+            <section v-for="group in visibleGroups" :key="group.name" class="service-section">
+              <div class="group-heading">
+                <Layers :size="15" aria-hidden="true" />
+                <h3>{{ group.name }}</h3>
+              </div>
+
+              <div class="service-grid">
+                <article v-for="monitor in group.monitors" :key="monitor.id" class="service-card" :class="statusClass(monitor.tone)">
+                  <header class="service-header">
+                    <span class="service-icon"><Activity :size="18" aria-hidden="true" /></span>
+                    <div class="service-name">
+                      <h4>{{ monitor.name }}</h4>
+                      <span>{{ formatMonitorType(monitor.type) }}</span>
+                    </div>
+                    <span class="service-state"><span class="status-dot" aria-hidden="true" />{{ monitor.label }}</span>
+                  </header>
+
+                  <dl class="service-metrics">
+                    <div>
+                      <dt>24 小时可用率</dt>
+                      <dd>{{ formatPercent(monitor.uptime) }}</dd>
+                    </div>
+                    <div>
+                      <dt>7 天可用率</dt>
+                      <dd>{{ formatPercent(monitor.uptime7d) }}</dd>
+                    </div>
+                    <div>
+                      <dt>延迟</dt>
+                      <dd>{{ formatPing(monitor.ping ?? monitor.avgPing) }}</dd>
+                    </div>
+                    <div>
+                      <dt>最近检测</dt>
+                      <dd>{{ formatRelativeTime(monitor.lastChecked) }}</dd>
+                    </div>
+                  </dl>
+
+                  <div class="service-history">
+                    <div class="history-heading">
+                      <span>近期心跳</span>
+                      <span>最近 {{ heartbeatSlotCount }} 次</span>
+                    </div>
+                    <div
+                      class="sparkline"
+                      role="group"
+                      :aria-label="`${monitor.name}的近期心跳，使用左右方向键浏览`"
+                      :style="{ '--beat-count': heartbeatSlotCount }"
+                      @keydown="moveBeatFocus"
+                    >
+                      <template
+                        v-for="(beat, index) in recentBeatSlots(monitor.beats)"
+                        :key="beat.isPlaceholder ? `empty-${index}` : `${beat.time || 'beat'}-${index}`"
+                      >
+                        <span v-if="beat.isPlaceholder" class="beat is-empty" aria-hidden="true" />
+                        <button
+                          v-else
+                          type="button"
+                          class="beat"
+                          :class="beatClass(beat)"
+                          :style="{ '--beat-index': index }"
+                          :tabindex="index === heartbeatSlotCount - 1 ? 0 : -1"
+                          :aria-label="formatBeatTooltip(beat)"
+                        >
+                          <span class="beat-tooltip" aria-hidden="true">{{ formatBeatTooltip(beat) }}</span>
+                        </button>
+                      </template>
+                    </div>
+                    <div class="history-axis" aria-hidden="true">
+                      <span>较早</span>
+                      <span>最新</span>
+                    </div>
+                  </div>
+                </article>
+              </div>
+
+              <p v-if="!group.monitors.length" class="empty-state">此分组暂无监控服务</p>
+            </section>
+          </div>
+        </Transition>
+      </section>
+
+      <aside v-if="hasOfficialStatus" id="official" class="official-rail" aria-labelledby="official-heading">
+        <div class="rail-heading">
+          <span class="rail-icon"><Globe :size="20" aria-hidden="true" /></span>
+          <h2 id="official-heading">官方动态</h2>
+        </div>
+
+        <div v-if="officialStatusError" class="notice is-error" role="alert">
+          <AlertTriangle :size="18" aria-hidden="true" />
+          <span>{{ officialStatusError.statusMessage || officialStatusError.message }}</span>
+        </div>
+
+        <template v-else-if="visibleOfficialSource">
+          <div class="official-tabs" role="group" aria-label="官方状态来源">
+            <button
+              v-for="source in officialSources"
+              :key="source.id"
+              class="official-tab"
+              :class="officialTabClass(source)"
+              type="button"
+              :aria-pressed="selectedOfficialSource === source.id"
+              @click="selectedOfficialSource = source.id"
+            >
+              <span>{{ source.name }}</span>
+              <span class="official-tab-count">{{ officialTabCount(source) }}</span>
+            </button>
           </div>
 
-          <div v-if="officialStatusError" class="notice is-error">
-            <AlertTriangle :size="18" />
-            <span>{{ officialStatusError.statusMessage || officialStatusError.message }}</span>
-          </div>
-
-          <div v-else-if="visibleOfficialSource" class="official-status-stack">
-            <div class="official-tabs" role="tablist" aria-label="官方状态来源">
-              <button
-                v-for="source in officialSources"
-                :key="source.id"
-                type="button"
-                class="official-tab"
-                :class="[officialTabClass(source), { 'is-active': selectedOfficialSource === source.id }]"
-                role="tab"
-                :aria-selected="selectedOfficialSource === source.id"
-                @click="selectedOfficialSource = source.id"
-              >
-                <span class="official-tab-label">{{ source.name }}</span>
-                <span class="official-tab-count">{{ officialTabCount(source) }}</span>
-              </button>
-            </div>
-
-            <template v-if="visibleOfficialSource.items.length">
-              <div class="openai-list">
-                <a
-                  v-for="item in visibleOfficialSource.items"
-                  :key="`${visibleOfficialSource.id}-${item.id}`"
-                  class="openai-item"
-                  :class="officialItemClass(item.tone)"
-                  :href="item.link"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <div>
-                    <div class="openai-meta">
-                      <span>{{ item.status }}</span>
-                      <time>{{ formatRelativeTime(item.publishedAt) }}</time>
+          <Transition name="panel">
+            <div :key="visibleOfficialSource.id" class="official-feed">
+              <ul v-if="visibleOfficialSource.items.length" class="official-list">
+                <li v-for="item in visibleOfficialSource.items" :key="item.id">
+                  <a
+                    class="official-item"
+                    :class="`is-${item.tone}`"
+                    :href="item.link"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <div class="official-meta">
+                      <span class="official-item-status">{{ item.status }}</span>
+                      <time :datetime="item.publishedAt || undefined">{{ formatRelativeTime(item.publishedAt) }}</time>
                     </div>
                     <h3>{{ item.title }}</h3>
-                    <p>{{ item.summary }}</p>
-                  </div>
-                  <ExternalLink :size="16" />
-                </a>
-              </div>
-            </template>
+                    <p v-if="item.summary">{{ item.summary }}</p>
+                    <ExternalLink :size="14" class="official-link-icon" aria-hidden="true" />
+                  </a>
+                </li>
+              </ul>
 
-            <div v-else class="notice">
-              <span>{{ visibleOfficialSource.name }} 暂无官方消息</span>
+              <p v-else class="empty-state">{{ visibleOfficialSource.name }} 暂无官方消息</p>
+
+              <a class="official-home" :href="visibleOfficialSource.homepage" target="_blank" rel="noreferrer">
+                打开 {{ visibleOfficialSource.name }} 状态页
+                <ExternalLink :size="13" aria-hidden="true" />
+              </a>
             </div>
-          </div>
-        </section>
+          </Transition>
+        </template>
       </aside>
     </div>
+
+    <section v-if="hasAlerts" id="events" class="events-section" aria-labelledby="events-heading">
+      <div class="section-heading">
+        <h2 id="events-heading">事件与维护</h2>
+      </div>
+      <div class="alerts-band">
+        <article v-for="incident in incidents" :key="`incident-${incident.title}-${incident.createdAt}`" class="alert-card is-degraded">
+          <span class="count-icon"><AlertTriangle :size="18" aria-hidden="true" /></span>
+          <div class="alert-copy">
+            <h3>{{ incident.title }}</h3>
+            <time :datetime="incident.createdAt || undefined">{{ formatDateTime(incident.createdAt) }}</time>
+            <p>{{ incident.content }}</p>
+          </div>
+        </article>
+
+        <article v-for="item in maintenanceList" :key="`maintenance-${item.title}-${item.startAt}`" class="alert-card is-maintenance">
+          <span class="count-icon"><Wrench :size="18" aria-hidden="true" /></span>
+          <div class="alert-copy">
+            <h3>{{ item.title }}</h3>
+            <span class="event-time">{{ formatDateTime(item.startAt) }} – {{ formatDateTime(item.endAt) }}</span>
+            <p>{{ item.description }}</p>
+          </div>
+        </article>
+      </div>
+    </section>
   </main>
 </template>
